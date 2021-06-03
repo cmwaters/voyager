@@ -5,3 +5,5 @@ Voyager is an extension of the [Sputnik DAO](https://github.com/near-daos/sputni
 ## Changelog
 
 This section records changes made between [SputnikDAO](https://github.com/near-daos/sputnik-dao-contract) and Voyager (this repository).
+
+- Allows for a proposer to withdraw a proposal so long as no other member has voted for it yet. 

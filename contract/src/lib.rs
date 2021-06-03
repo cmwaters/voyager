@@ -11,7 +11,7 @@ use near_sdk::{
 use crate::bounties::{Bounty, BountyClaim, VersionedBounty};
 pub use crate::policy::{Policy, RoleKind, RolePermission, VersionedPolicy, VotePolicy};
 use crate::proposals::VersionedProposal;
-pub use crate::proposals::{Proposal, ProposalInput, ProposalKind, ProposalStatus};
+pub use crate::proposals::{Proposal, ProposalInput, Instruction, ProposalKind, ProposalStatus};
 pub use crate::types::{Action, Config};
 
 mod bounties;
@@ -213,11 +213,11 @@ mod tests {
         testing_env!(context.attached_deposit(to_yocto("1")).build());
         contract.add_proposal(ProposalInput {
             description: "test".to_string(),
-            kind: ProposalKind::Transfer {
+            instructions: vec![Instruction::Transfer {
                 token_id: BASE_TOKEN.to_string(),
                 receiver_id: accounts(2).into(),
                 amount: U128(to_yocto("100")),
-            },
+            }],
         })
     }
 
@@ -230,14 +230,14 @@ mod tests {
             VersionedPolicy::Default(vec![accounts(1).into()]),
         );
         let id = create_proposal(&mut context, &mut contract);
-        assert_eq!(contract.get_proposal(id).proposal.description, "test");
+        assert_eq!(contract.get_proposal(id).proposal.versions[0].description, "test");
         assert_eq!(contract.get_proposals(0, 10).len(), 1);
 
         let id = create_proposal(&mut context, &mut contract);
-        contract.act_proposal(id, Action::VoteApprove);
+        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
         assert_eq!(
             contract.get_proposal(id).proposal.status,
-            ProposalStatus::Approved
+            ProposalStatus::Approved{ version: 0 }
         );
 
         let id = create_proposal(&mut context, &mut contract);
@@ -258,10 +258,10 @@ mod tests {
             .build());
         let _id = contract.add_proposal(ProposalInput {
             description: "test".to_string(),
-            kind: ProposalKind::AddMemberToRole {
+            instructions: vec![Instruction::AddMemberToRole {
                 member_id: accounts(2).into(),
                 role: "council".to_string(),
-            },
+            }],
         });
     }
 
@@ -275,7 +275,7 @@ mod tests {
             VersionedPolicy::Default(vec![accounts(1).into()]),
         );
         let id = create_proposal(&mut context, &mut contract);
-        assert_eq!(contract.get_proposal(id).proposal.description, "test");
+        assert_eq!(contract.get_proposal(id).proposal.versions[0].description, "test");
         contract.act_proposal(id, Action::RemoveProposal);
     }
 
@@ -289,7 +289,7 @@ mod tests {
             .insert("*:RemoveProposal".to_string());
         let mut contract = Contract::new(Config::test_config(), policy);
         let id = create_proposal(&mut context, &mut contract);
-        assert_eq!(contract.get_proposal(id).proposal.description, "test");
+        assert_eq!(contract.get_proposal(id).proposal.versions[0].description, "test");
         contract.act_proposal(id, Action::RemoveProposal);
         assert_eq!(contract.get_proposals(0, 10).len(), 0);
     }
@@ -306,7 +306,7 @@ mod tests {
         testing_env!(context
             .block_timestamp(1_000_000_000 * 24 * 60 * 60 * 8)
             .build());
-        contract.act_proposal(id, Action::VoteApprove);
+        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
             VersionedPolicy::Default(vec![accounts(1).into(), accounts(2).into()]),
         );
         let id = create_proposal(&mut context, &mut contract);
-        contract.act_proposal(id, Action::VoteApprove);
-        contract.act_proposal(id, Action::VoteApprove);
+        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
+        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
     }
 }

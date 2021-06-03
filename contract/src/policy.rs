@@ -2,11 +2,11 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::json_types::{WrappedDuration, U128};
+use near_sdk::json_types::{WrappedDuration, WrappedTimestamp, U128};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, AccountId, Balance};
 
-use crate::proposals::{Proposal, ProposalKind, ProposalStatus, Vote};
+use crate::proposals::{Proposal, ProposalInput, ProposalKind, Instruction, ProposalStatus};
 use crate::types::Action;
 
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
@@ -71,8 +71,6 @@ pub struct RolePermission {
     /// Set of actions on which proposals that this role is allowed to execute.
     /// <proposal_kind>:<action>
     pub permissions: HashSet<String>,
-    /// For each proposal kind, defines voting policy.
-    pub vote_policy: HashMap<String, VotePolicy>,
 }
 
 pub struct UserInfo {
@@ -103,7 +101,7 @@ impl WeightOrRatio {
     }
 }
 
-/// How the voting policy votes get weigthed.
+/// How the voting policy votes get weighted.
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
 #[cfg_attr(not(target_arch = "wasm32"), derive(Debug, PartialEq))]
 #[serde(crate = "near_sdk::serde")]
@@ -146,6 +144,10 @@ impl Default for VotePolicy {
 #[cfg_attr(not(target_arch = "wasm32"), derive(Debug, PartialEq))]
 #[serde(crate = "near_sdk::serde")]
 pub struct Policy {
+    /// Defines how proposals should be categorized and the vote policy associated with
+    /// the proposal kind. A proposal can only be one kind - we use the order of the
+    /// vector to define which proposal_kind thus users should define order 
+    pub proposal_kinds: Vec<ProposalKind>,
     /// List of roles and permissions for them in the current policy.
     pub roles: Vec<RolePermission>,
     /// Default vote policy. Used when given proposal kind doesn't have special policy.
@@ -178,12 +180,12 @@ pub enum VersionedPolicy {
 ///     - proposal & bounty forgiveness period is 1 day
 fn default_policy(council: Vec<AccountId>) -> Policy {
     Policy {
+        proposal_kinds: Vec::new(),
         roles: vec![
             RolePermission {
                 name: "all".to_string(),
                 kind: RoleKind::Everyone,
                 permissions: vec!["*:AddProposal".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
             },
             RolePermission {
                 name: "council".to_string(),
@@ -198,7 +200,6 @@ fn default_policy(council: Vec<AccountId>) -> Policy {
                 ]
                 .into_iter()
                 .collect(),
-                vote_policy: HashMap::default(),
             },
         ],
         default_vote_policy: VotePolicy::default(),
@@ -280,12 +281,34 @@ impl Policy {
         roles
     }
 
+    /// Find the proposal_kind based off the name and returns the corresponding vote
+    /// policy. Returns None if no matching proposal_kind can be found
+    pub fn get_vote_policy(&self, proposal_kind: &String) -> Option<&VotePolicy> {
+        for p in self.proposal_kinds.iter() {
+            if p.name == *proposal_kind {
+                return Some(&p.vote_policy)
+            }
+        }
+        None
+    }
+
+    /// Returns the kind of proposal based off the instructions within the proposal. 
+    /// Returns an empty string if no policies match
+    pub fn match_proposal_kind(&self, instructions: Vec<Instruction>) -> String {
+        for kind in self.proposal_kinds {
+            if kind.match_proposal(instructions) {
+                return kind.name
+            }
+        }
+        "".to_string()
+    }
+
     /// Can given user execute given action on this proposal.
     /// Returns all roles that allow this action.
     pub fn can_execute_action(
         &self,
         user: UserInfo,
-        proposal_kind: &ProposalKind,
+        proposal_kind: &String,
         action: &Action,
     ) -> (Vec<String>, bool) {
         let roles = self.get_user_roles(user);
@@ -295,11 +318,11 @@ impl Policy {
             .filter_map(|(role, permissions)| {
                 let allowed_role = permissions.contains(&format!(
                     "{}:{}",
-                    proposal_kind.to_policy_label(),
-                    action.to_policy_label()
+                    proposal_kind,
+                    action.to_label()
                 )) || permissions
-                    .contains(&format!("{}:*", proposal_kind.to_policy_label()))
-                    || permissions.contains(&format!("*:{}", action.to_policy_label()))
+                    .contains(&format!("{}:*", proposal_kind))
+                    || permissions.contains(&format!("*:{}", action.to_label()))
                     || permissions.contains("*:*");
                 allowed = allowed || allowed_role;
                 if allowed_role {
@@ -310,20 +333,6 @@ impl Policy {
             })
             .collect();
         (allowed_roles, allowed)
-    }
-
-    /// Returns if given proposal kind is token weighted.
-    pub fn is_token_weighted(&self, role: &String, proposal_kind_label: &String) -> bool {
-        let role_info = self.internal_get_role(role).expect("ERR_ROLE_NOT_FOUND");
-        match role_info
-            .vote_policy
-            .get(proposal_kind_label)
-            .unwrap_or(&self.default_vote_policy)
-            .weight_kind
-        {
-            WeightKind::TokenWeight => true,
-            _ => false,
-        }
     }
 
     fn internal_get_role(&self, name: &String) -> Option<&RolePermission> {
@@ -340,7 +349,6 @@ impl Policy {
     pub fn proposal_status(
         &self,
         proposal: &Proposal,
-        roles: Vec<String>,
         total_supply: Balance,
     ) -> ProposalStatus {
         assert_eq!(
@@ -352,37 +360,46 @@ impl Policy {
             // Proposal expired.
             return ProposalStatus::Expired;
         };
-        for role in roles {
-            let role_info = self.internal_get_role(&role).expect("ERR_MISSING_ROLE");
-            let vote_policy = role_info
-                .vote_policy
-                .get(&proposal.kind.to_policy_label().to_string())
-                .unwrap_or(&self.default_vote_policy);
-            let threshold = std::cmp::max(
-                vote_policy.quorum.0,
-                match &vote_policy.weight_kind {
-                    WeightKind::TokenWeight => vote_policy.threshold.to_weight(total_supply),
-                    WeightKind::RoleWeight => vote_policy.threshold.to_weight(
-                        role_info
-                            .kind
-                            .get_role_size()
-                            .expect("ERR_UNSUPPORTED_ROLE") as Balance,
-                    ),
-                },
-            );
-            // Check if there is anything voted above the threshold specified by policy for given role.
-            let vote_counts = proposal.vote_counts.get(&role).expect("ERR_MISSING_ROLE");
-            if vote_counts[Vote::Approve as usize] >= threshold {
-                return ProposalStatus::Approved;
-            } else if vote_counts[Vote::Reject as usize] >= threshold {
-                return ProposalStatus::Rejected;
-            } else if vote_counts[Vote::Remove as usize] >= threshold {
-                return ProposalStatus::Removed;
-            } else {
-                // continue to next role.
+        let vote_policy = self
+            .get_vote_policy(&proposal.kind)
+            .unwrap_or(&self.default_vote_policy);
+        let threshold = self.get_threshold(&vote_policy, total_supply, &proposal.kind);
+        if proposal.reject_count > threshold {
+            return ProposalStatus::Rejected
+        }
+        let version = 0;
+        for total in proposal.approve_count.into_iter() {
+            if total >= threshold {
+                return ProposalStatus::Approved{version}
             }
+            version += 1;
         }
         proposal.status.clone()
+    }
+
+    /// Calculates the threshold number of weighted vote needed
+    /// for a proposal version to pass
+    pub fn get_threshold(&self, vote_policy: &VotePolicy, total_supply: u128, proposal_kind: &String) -> u128 {
+        std::cmp::max(
+            vote_policy.quorum.0,
+            match &vote_policy.weight_kind {
+                WeightKind::TokenWeight => vote_policy.threshold.to_weight(total_supply),
+                WeightKind::RoleWeight => {
+                    let total: u128 = 0;
+                    for role in self.roles.iter() {
+                        if role.permissions.contains(&format!("{}:*", proposal_kind))
+                            || role.permissions.contains(&format!("*:{}", Action::VoteApprove{ version: 0 }.to_label()))
+                            || role.permissions.contains(&format!("{}:{}", proposal_kind, Action::VoteApprove{ version: 0 }.to_label())) {
+                            total += role
+                                .kind
+                                .get_role_size()
+                                .expect("ERR_UNSUPPORTED_ROLE") as Balance
+                        }
+                    }
+                    vote_policy.threshold.to_weight(total)
+                },
+            },
+        )
     }
 }
 

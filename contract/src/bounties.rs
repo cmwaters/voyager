@@ -20,7 +20,7 @@ pub struct BountyClaim {
 }
 
 /// Bounty information.
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(not(target_arch = "wasm32"), derive(Debug))]
 #[serde(crate = "near_sdk::serde")]
 pub struct Bounty {
@@ -174,10 +174,10 @@ impl Contract {
             );
             self.add_proposal(ProposalInput {
                 description,
-                kind: ProposalKind::BountyDone {
+                instructions: vec![Instruction::BountyDone {
                     bounty_id: id,
                     receiver_id: sender_id.clone(),
-                },
+                }],
             });
             claims[claim_idx].completed = true;
             self.bounty_claimers.insert(&sender_id, &claims);
@@ -228,7 +228,7 @@ mod tests {
         testing_env!(context.attached_deposit(to_yocto("1")).build());
         contract.add_proposal(ProposalInput {
             description: "test".to_string(),
-            kind: ProposalKind::AddBounty {
+            instructions: vec![Instruction::AddBounty {
                 bounty: Bounty {
                     description: "test bounty".to_string(),
                     token: BASE_TOKEN.to_string(),
@@ -236,11 +236,11 @@ mod tests {
                     times: 2,
                     max_deadline: WrappedDuration::from(1_000),
                 },
-            },
+            }],
         });
         assert_eq!(contract.get_last_bounty_id(), 0);
 
-        contract.act_proposal(0, Action::VoteApprove);
+        contract.act_proposal(0, Action::VoteApprove{ version: 0 });
 
         assert_eq!(contract.get_last_bounty_id(), 1);
         assert_eq!(contract.get_bounty(0).bounty.times, 2);
@@ -262,11 +262,11 @@ mod tests {
 
         assert_eq!(contract.get_last_proposal_id(), 2);
         assert_eq!(
-            contract.get_proposal(1).proposal.kind.to_policy_label(),
+            contract.get_proposal(1).proposal.kind,
             "bounty_done"
         );
 
-        contract.act_proposal(1, Action::VoteApprove);
+        contract.act_proposal(1, Action::VoteApprove{ version: 0 });
 
         assert_eq!(contract.get_bounty_claims(accounts(1)).len(), 0);
         assert_eq!(contract.get_bounty(0).bounty.times, 1);
