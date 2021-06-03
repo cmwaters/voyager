@@ -5,7 +5,7 @@ use near_sdk::AccountId;
 use near_sdk_sim::{call, to_yocto, view};
 
 use sputnik_staking::User;
-use sputnikdao2::{
+use voyager::{
     Action, Policy, Proposal, ProposalInput, ProposalKind, ProposalStatus, RoleKind,
     RolePermission, VersionedPolicy, VotePolicy,
 };

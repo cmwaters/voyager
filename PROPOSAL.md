@@ -1,4 +1,6 @@
-# Sputnik Improvement Proposals
+# Sputnik Improvement Proposals 
+
+> NOTE: This is the original proposal and differs slightly to the implemetation
 
 The Sputnik DAO contract provides a solid foundation for the governance of organizations on NEAR. This proposal lists a collection of ideas with the aim of exploring more creative and flexible governance systems and extending the current Sputnik framework. This proposal is part of the Open Web Governance Challenge.
 
