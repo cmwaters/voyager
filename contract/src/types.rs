@@ -81,13 +81,6 @@ impl Action {
         }
         
     }
-
-    pub fn is_vote(&self) -> bool {
-        match self {
-            Action::VoteApprove{ .. } | Action::VoteReject | Action::VoteRemove{ .. } => true,
-            _ => false,
-        }
-    }
 }
 
 /// Self upgrade, optimizes gas by not loading into memory the code.

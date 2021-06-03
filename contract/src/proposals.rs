@@ -30,8 +30,14 @@ pub struct  ProposalKind {
 }
 
 impl ProposalKind {
-    pub fn match_proposal(&self, instructions: Vec<Instruction>) -> bool {
-        false
+    pub fn match_proposal(&self, instructions: &Vec<Instruction>) -> bool {
+        let instruction_kind: Vec<InstructionKind> = instructions.into_iter().map(|i| i.to_enum()).collect();
+        for instr in self.required_instrs.iter() {
+            if !instruction_kind.contains(instr) {
+                return false
+            }
+        }
+        true
     }
 }
 
@@ -41,7 +47,7 @@ impl ProposalKind {
 pub enum ProposalStatus {
     InProgress,
     /// If quorum voted yes, this version of the proposal is successfully approved.
-    Approved{ version: u16 },
+    Approved{ version: u8 },
     /// If quorum voted no, this proposal is rejected. Bond is returned.
     Rejected,
     /// Expired after period of time.
@@ -233,23 +239,23 @@ impl Proposal {
                 self.approve_count[version as usize] += amount;
             }
         }
-        let votes = self.votes.insert(account_id.clone(), vec![vote]);
+        let votes = self.votes.insert(account_id.clone(), vec![vote.clone()]);
         if votes.is_some() {
-            check_double_vote(votes.unwrap(), vote)
+            check_double_vote(votes.unwrap(), &vote)
         }
     }
 
 }
 
-fn check_double_vote(votes: Vec<Vote>, vote: Vote) {
+fn check_double_vote(votes: Vec<Vote>, vote: &Vote) {
     match vote {
         Vote::Remove { .. } |
         Vote::Reject => {
             for v in votes {
-                assert!(v != vote, "ERR_ALREADY_VOTED")
+                assert!(&v != vote, "ERR_ALREADY_VOTED")
             }
         }
-        Vote::Approve { version } => {
+        Vote::Approve { .. } => {
             for v in votes {
                 assert!(matches!(v, Vote::Approve{ .. }), "ERR_ALREADY_VOTED")
             }
@@ -391,17 +397,6 @@ impl Contract {
         }
     }
 
-    /// Process remove proposal
-    fn internal_remove_proposal(
-        &mut self,
-        proposal: &mut Proposal,
-        version: u8,
-    ) {
-        assert!(version < proposal.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
-        proposal.remove_flag[version as usize] = true;
-    }
-
-
     pub(crate) fn internal_user_info(&self) -> UserInfo {
         let account_id = env::predecessor_account_id();
         UserInfo {
@@ -416,7 +411,7 @@ impl Contract {
     /// Add proposal to this DAO.
     #[payable]
     pub fn add_proposal(&mut self, proposal_input: ProposalInput) -> u64 {
-        let kind = self.internal_check_proposal(proposal_input);
+        let kind = self.internal_check_proposal(&proposal_input);
 
         let proposal = Proposal {
             versions: vec![
@@ -444,8 +439,8 @@ impl Contract {
     }
 
     pub fn add_counter_proposal(&mut self, id: u64, proposal_input: ProposalInput) -> u8 {
-        let kind = self.internal_check_proposal(proposal_input);
-        let proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let kind = self.internal_check_proposal(&proposal_input);
+        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         assert_eq!(kind, proposal.kind, "ERR_DIFFERENT_PROPOSAL_KIND");
 
         proposal.versions.push(ProposalVersion{
@@ -456,9 +451,10 @@ impl Contract {
         proposal.approve_count.push(0);
         proposal.remove_count.push(0);
         proposal.remove_flag.push(false);
+        (proposal.versions.len() - 1) as u8
     }
 
-    fn internal_check_proposal(&mut self, proposal_input: ProposalInput) -> String {
+    fn internal_check_proposal(&mut self, proposal_input: &ProposalInput) -> String {
         let policy = self.policy.get().unwrap().to_policy();
         assert!(
             env::attached_deposit() >= policy.proposal_bond.0,
@@ -467,7 +463,7 @@ impl Contract {
 
         // 1. validate proposal.
         assert!(proposal_input.instructions.len() > 0, "ERR_EMPTY_INSTRUCTION_SET");
-        assert!(self.is_valid_instruction_set(proposal_input.instructions), "ERR_INVALID_INSTRUCTION_SET");
+        assert!(self.is_valid_instruction_set(&proposal_input.instructions), "ERR_INVALID_INSTRUCTION_SET");
         match proposal_input.instructions[0] {
             Instruction::SetStakingContract { .. } => assert!(
                 self.staking_id.is_none(),
@@ -478,22 +474,21 @@ impl Contract {
         };
 
         // 2. check permission of caller to add proposal.
-        let kind = policy.match_proposal_kind(proposal_input.instructions);
+        let kind = policy.match_proposal_kind(&proposal_input.instructions);
         assert!(
             policy
                 .can_execute_action(
                     self.internal_user_info(),
                     &kind,
                     &Action::AddProposal
-                )
-                .1,
+                ),
             "ERR_PERMISSION_DENIED"
         );
         // 3. return the proposal kind
         kind
     }
 
-    fn is_valid_instruction_set(&self, instructions: Vec<Instruction>) -> bool {
+    fn is_valid_instruction_set(&self, instructions: &Vec<Instruction>) -> bool {
         if instructions.len() > 1 {
             for instr in instructions.iter() {
                 match instr {
@@ -514,8 +509,7 @@ impl Contract {
         let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         let policy = self.policy.get().unwrap().to_policy();
         // Check permissions for the given action.n r5gfrdc b
-        let (roles, allowed) =
-            policy.can_execute_action(self.internal_user_info(), &proposal.kind, &action);
+        let allowed = policy.can_execute_action(self.internal_user_info(), &proposal.kind, &action);
         assert!(allowed, "ERR_PERMISSION_DENIED");
         assert_eq!(
             proposal.status,
@@ -524,15 +518,6 @@ impl Contract {
         );
         let vote_policy = policy.get_vote_policy(&proposal.kind).expect("ERR_NO_VOTE_POLICY");
         let sender_id = env::predecessor_account_id();
-        if action.is_vote() {
-            // Update vote tally
-            proposal.update_votes(
-                &sender_id,
-                Vote::from(action),
-                &vote_policy,
-                self.get_user_weight(&sender_id),
-            );
-        }
         // Update proposal given action. Returns true if should be updated in storage.
         let update = match action {
             Action::AddProposal => env::panic(b"ERR_WRONG_ACTION"),
@@ -558,6 +543,13 @@ impl Contract {
                 true
             },
             Action::VoteRemove{ version } => {
+                // Update vote tally
+                proposal.update_votes(
+                    &sender_id,
+                    Vote::from(action),
+                    &vote_policy,
+                    self.get_user_weight(&sender_id),
+                );
                 let threshold = policy.get_threshold(
                     &vote_policy, 
                     self.total_delegation_amount, 
@@ -569,15 +561,32 @@ impl Contract {
                 true
             },
             Action::VoteApprove{ version } => {
+                // Update vote tally
+                proposal.update_votes(
+                    &sender_id,
+                    Vote::from(action),
+                    &vote_policy,
+                    self.get_user_weight(&sender_id),
+                );
                 // Updates proposal status with new votes using the policy.
                 proposal.status =
-                    policy.proposal_status(&proposal, roles, self.total_delegation_amount);
-                if proposal.status == (ProposalStatus::Approved{ version }) {
-                    self.internal_execute_proposal(&policy, &proposal, &proposal.versions[version as usize]);
+                    policy.proposal_status(&proposal, self.total_delegation_amount);
+                match proposal.status {
+                    ProposalStatus::Approved{ .. } => {
+                        self.internal_execute_proposal(&policy, &proposal, &proposal.versions[version as usize]);
+                    },
+                    _ => unreachable!()
                 }
                 true
             },
             Action::VoteReject => {
+                // Update vote tally
+                proposal.update_votes(
+                    &sender_id,
+                    Vote::from(action),
+                    &vote_policy,
+                    self.get_user_weight(&sender_id),
+                );
                 // Updates proposal status with new votes using the policy.
                 proposal.status =
                     policy.proposal_status(&proposal, self.total_delegation_amount);

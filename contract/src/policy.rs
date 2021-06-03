@@ -2,11 +2,11 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::json_types::{WrappedDuration, WrappedTimestamp, U128};
+use near_sdk::json_types::{WrappedDuration, U128};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, AccountId, Balance};
 
-use crate::proposals::{Proposal, ProposalInput, ProposalKind, Instruction, ProposalStatus};
+use crate::proposals::{Proposal, ProposalKind, Instruction, ProposalStatus};
 use crate::types::Action;
 
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
@@ -294,8 +294,8 @@ impl Policy {
 
     /// Returns the kind of proposal based off the instructions within the proposal. 
     /// Returns an empty string if no policies match
-    pub fn match_proposal_kind(&self, instructions: Vec<Instruction>) -> String {
-        for kind in self.proposal_kinds {
+    pub fn match_proposal_kind(&self, instructions: &Vec<Instruction>) -> String {
+        for kind in self.proposal_kinds.clone() {
             if kind.match_proposal(instructions) {
                 return kind.name
             }
@@ -310,38 +310,21 @@ impl Policy {
         user: UserInfo,
         proposal_kind: &String,
         action: &Action,
-    ) -> (Vec<String>, bool) {
+    ) ->  bool {
         let roles = self.get_user_roles(user);
-        let mut allowed = false;
-        let allowed_roles = roles
-            .into_iter()
-            .filter_map(|(role, permissions)| {
-                let allowed_role = permissions.contains(&format!(
+        for permissions in roles.values() {
+            if permissions.contains(&format!(
                     "{}:{}",
                     proposal_kind,
                     action.to_label()
                 )) || permissions
                     .contains(&format!("{}:*", proposal_kind))
-                    || permissions.contains(&format!("*:{}", action.to_label()))
-                    || permissions.contains("*:*");
-                allowed = allowed || allowed_role;
-                if allowed_role {
-                    Some(role)
-                } else {
-                    None
+                || permissions.contains(&format!("*:{}", action.to_label()))
+                || permissions.contains("*:*") {
+                    return true
                 }
-            })
-            .collect();
-        (allowed_roles, allowed)
-    }
-
-    fn internal_get_role(&self, name: &String) -> Option<&RolePermission> {
-        for role in self.roles.iter() {
-            if role.name == *name {
-                return Some(role);
-            }
         }
-        None
+        false
     }
 
     /// Get proposal status for given proposal.
@@ -367,8 +350,8 @@ impl Policy {
         if proposal.reject_count > threshold {
             return ProposalStatus::Rejected
         }
-        let version = 0;
-        for total in proposal.approve_count.into_iter() {
+        let mut version = 0;
+        for total in proposal.approve_count.clone().into_iter() {
             if total >= threshold {
                 return ProposalStatus::Approved{version}
             }
@@ -385,7 +368,7 @@ impl Policy {
             match &vote_policy.weight_kind {
                 WeightKind::TokenWeight => vote_policy.threshold.to_weight(total_supply),
                 WeightKind::RoleWeight => {
-                    let total: u128 = 0;
+                    let mut total: u128 = 0;
                     for role in self.roles.iter() {
                         if role.permissions.contains(&format!("{}:*", proposal_kind))
                             || role.permissions.contains(&format!("*:{}", Action::VoteApprove{ version: 0 }.to_label()))
