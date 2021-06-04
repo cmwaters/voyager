@@ -4,10 +4,9 @@ use near_sdk::json_types::U128;
 use near_sdk::AccountId;
 use near_sdk_sim::{call, to_yocto, view};
 
-use sputnik_staking::User;
 use voyager::{
     Action, Policy, Proposal, ProposalInput, ProposalKind, ProposalStatus, RoleKind,
-    RolePermission, VersionedPolicy, VotePolicy,
+    RolePermission, VersionedPolicy, VotePolicy, Instruction,
 };
 
 use crate::utils::*;
@@ -25,24 +24,22 @@ fn test_multi_council() {
     let user2 = root.create_user(user(2), to_yocto("1000"));
     let user3 = root.create_user(user(3), to_yocto("1000"));
     let new_policy = Policy {
+        proposal_kinds: Vec::new(),
         roles: vec![
             RolePermission {
                 name: "all".to_string(),
                 kind: RoleKind::Everyone,
                 permissions: vec!["*:AddProposal".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
             },
             RolePermission {
                 name: "council".to_string(),
                 kind: RoleKind::Group(vec![user(1), user(2)].into_iter().collect()),
                 permissions: vec!["*:*".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
             },
             RolePermission {
                 name: "community".to_string(),
                 kind: RoleKind::Group(vec![user(1), user(3), user(4)].into_iter().collect()),
                 permissions: vec!["*:*".to_string()].into_iter().collect(),
-                vote_policy: HashMap::default(),
             },
         ],
         default_vote_policy: VotePolicy::default(),
@@ -56,9 +53,9 @@ fn test_multi_council() {
         &dao,
         ProposalInput {
             description: "new policy".to_string(),
-            kind: ProposalKind::ChangePolicy {
+            instructions: vec![Instruction::ChangePolicy {
                 policy: VersionedPolicy::Current(new_policy.clone()),
-            },
+            }],
         },
     )
     .assert_success();
@@ -73,7 +70,7 @@ fn test_multi_council() {
     // Finish with vote that is in both councils, which approves the proposal.
     vote(vec![&user1], &dao, 1);
     let proposal = view!(dao.get_proposal(1)).unwrap_json::<Proposal>();
-    assert_eq!(proposal.status, ProposalStatus::Approved);
+    assert_eq!(proposal.status, ProposalStatus::Approved{ version: 0 });
 }
 
 #[test]
@@ -90,10 +87,10 @@ fn test_create_dao_and_use_token() {
     add_member_proposal(&root, &dao, user2.account_id.clone()).assert_success();
     assert_eq!(view!(dao.get_last_proposal_id()).unwrap_json::<u64>(), 1);
     // Voting by user who is not member should fail.
-    should_fail(call!(user2, dao.act_proposal(0, Action::VoteApprove)));
-    call!(root, dao.act_proposal(0, Action::VoteApprove)).assert_success();
+    should_fail(call!(user2, dao.act_proposal(0, Action::VoteApprove{ version: 0 })));
+    call!(root, dao.act_proposal(0, Action::VoteApprove{ version: 0 })).assert_success();
     // voting second time should fail.
-    should_fail(call!(root, dao.act_proposal(0, Action::VoteApprove)));
+    should_fail(call!(root, dao.act_proposal(0, Action::VoteApprove{ version: 0 })));
     // Add 3rd member.
     add_member_proposal(&user2, &dao, user3.account_id.clone()).assert_success();
     vote(vec![&root, &user2], &dao, 1);

@@ -15,8 +15,8 @@ use crate::*;
 /// proposals based on the kinds of instructions that are included in a proposal
 /// The ability to categorize proposals helps define the purpose of roles and
 /// allows for different vote policies.
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(Clone, Debug))]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(Debug, PartialEq))]
 #[serde(crate = "near_sdk::serde")]
 pub struct  ProposalKind {
     /// All proposals fall under this kind
@@ -68,7 +68,7 @@ pub struct ActionCall {
 }
 
 /// Instruction is an action that may be executed when a proposal is approved.
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, PartialEq)]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 #[cfg_attr(not(target_arch = "wasm32"), derive(Clone, Debug))]
 #[serde(crate = "near_sdk::serde")]
 pub enum Instruction {
@@ -182,7 +182,7 @@ pub struct Proposal {
     pub submission_time: WrappedTimestamp,
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone)]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 #[cfg_attr(not(target_arch = "wasm32"), derive(Debug))]
 #[serde(crate = "near_sdk::serde")]
 pub struct ProposalVersion {
@@ -219,11 +219,9 @@ impl Proposal {
         user_weight: Balance,
     ) {
         // calculate the weight of the vote
-        let amount = if vote_policy.weight_kind == WeightKind::TokenWeight
-        {
-            user_weight
-        } else {
-            1
+        let amount = match vote_policy.weight_kind {
+            WeightKind::TokenWeight => user_weight,
+            WeightKind::RoleWeight => 1,
         };
         // version should have already been vetted
         match vote {
@@ -421,7 +419,7 @@ impl Contract {
                     description: proposal_input.description,
                 }
             ],
-            kind: kind,
+            kind: kind.clone(),
             status: ProposalStatus::InProgress,
             approve_count: vec![0],
             reject_count: 0,
@@ -438,9 +436,11 @@ impl Contract {
         id
     }
 
+    /// Adds a counter proposal to an existing one. Voters can only vote for one of these versions
     pub fn add_counter_proposal(&mut self, id: u64, proposal_input: ProposalInput) -> u8 {
         let kind = self.internal_check_proposal(&proposal_input);
         let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        // the new proposal must be of the same proposal_kind
         assert_eq!(kind, proposal.kind, "ERR_DIFFERENT_PROPOSAL_KIND");
 
         proposal.versions.push(ProposalVersion{

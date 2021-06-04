@@ -24,4 +24,3 @@ hex = "0.4.2"
 
 [dev-dependencies]
 near-sdk-sim = "3.1.0"
-sputnik-staking = "1.0.0"

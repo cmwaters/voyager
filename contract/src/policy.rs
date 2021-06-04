@@ -295,9 +295,9 @@ impl Policy {
     /// Returns the kind of proposal based off the instructions within the proposal. 
     /// Returns an empty string if no policies match
     pub fn match_proposal_kind(&self, instructions: &Vec<Instruction>) -> String {
-        for kind in self.proposal_kinds.clone() {
+        for kind in self.proposal_kinds.iter() {
             if kind.match_proposal(instructions) {
-                return kind.name
+                return kind.name.clone()
             }
         }
         "".to_string()

@@ -2,13 +2,13 @@ use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{Base58CryptoHash, ValidAccountId};
 use near_sdk::serde_json::json;
 use near_sdk_sim::{call, to_yocto, view, DEFAULT_GAS};
-use sputnikdao2::{Action, ProposalInput, ProposalKind};
+use voyager::{Action, ProposalInput, ProposalKind, Instruction};
 
 mod utils;
 use crate::utils::*;
 
 near_sdk_sim::lazy_static_include::lazy_static_include_bytes! {
-    DAO_WASM_BYTES => "res/sputnikdao2.wasm",
+    DAO_WASM_BYTES => "res/voyager.wasm",
     OTHER_WASM_BYTES => "res/ref_exchange_release.wasm"
 }
 
@@ -28,13 +28,13 @@ fn test_upgrade() {
         root,
         dao.add_proposal(ProposalInput {
             description: "test".to_string(),
-            kind: ProposalKind::UpgradeSelf { hash }
+            instructions: vec![Instruction::UpgradeSelf { hash }]
         }),
         deposit = to_yocto("1")
     )
     .assert_success();
     assert_eq!(view!(dao.get_last_proposal_id()).unwrap_json::<u64>(), 1);
-    call!(root, dao.act_proposal(0, Action::VoteApprove)).assert_success();
+    call!(root, dao.act_proposal(0, Action::VoteApprove{ version: 0 })).assert_success();
     assert_eq!(view!(dao.version()).unwrap_json::<String>(), "2.0.0");
     call!(root, dao.remove_blob(hash)).assert_success();
     should_fail(call!(root, dao.remove_blob(hash)));
@@ -80,13 +80,13 @@ fn test_upgrade_other() {
         &dao,
         ProposalInput {
             description: "test".to_string(),
-            kind: ProposalKind::UpgradeRemote {
+            instructions: vec![Instruction::UpgradeRemote {
                 receiver_id: ref_account_id.clone(),
                 method_name: "upgrade".to_string(),
                 hash,
-            },
+            }],
         },
     )
     .assert_success();
-    call!(root, dao.act_proposal(0, Action::VoteApprove)).assert_success();
+    call!(root, dao.act_proposal(0, Action::VoteApprove{ version: 0 })).assert_success();
 }
