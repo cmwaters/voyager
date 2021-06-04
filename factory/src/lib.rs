@@ -6,7 +6,7 @@ use near_sdk::{assert_self, env, ext_contract, near_bindgen, AccountId, Promise}
 #[global_allocator]
 static ALLOC: near_sdk::wee_alloc::WeeAlloc<'_> = near_sdk::wee_alloc::WeeAlloc::INIT;
 
-const CODE: &[u8] = include_bytes!("../../contract/res/sputnikdao2.wasm");
+const CODE: &[u8] = include_bytes!("../../contract/res/voyager.wasm");
 
 /// Gas spent on the call & account creation.
 const CREATE_CALL_GAS: u64 = 75_000_000_000_000;
