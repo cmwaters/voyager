@@ -4,7 +4,7 @@ Voyager is an extension of the [Sputnik DAO](https://github.com/near-daos/sputni
 
 ## Documentation
 
-For documentation on the changes made and a walkthough of how to use them visit the [docs](https://github.io/cmwaters/voyager)
+For documentation on the changes made and a walkthough of how to use them visit the [docs](https://cmwaters/github.io/voyager)
 
 ## Changelog
 
