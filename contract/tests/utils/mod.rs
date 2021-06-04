@@ -10,7 +10,7 @@ use near_sdk_sim::{
 
 use near_sdk::json_types::U128;
 use sputnik_staking::ContractContract as StakingContract;
-use sputnikdao2::{
+use voyager::{
     Action, Config, ContractContract as DAOContract, ProposalInput, ProposalKind, VersionedPolicy,
 };
 use test_token::ContractContract as TestTokenContract;

@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use near_sdk::json_types::U128;
 use near_sdk::AccountId;
 use near_sdk_sim::{call, to_yocto, view};
 
 use voyager::{
-    Action, Policy, Proposal, ProposalInput, ProposalKind, ProposalStatus, RoleKind,
+    Action, Policy, Proposal, ProposalInput, ProposalStatus, RoleKind,
     RolePermission, VersionedPolicy, VotePolicy, Instruction,
 };
 
@@ -113,9 +111,9 @@ fn test_create_dao_and_use_token() {
         &dao,
         ProposalInput {
             description: "test".to_string(),
-            kind: ProposalKind::SetStakingContract {
+            instructions: vec![Instruction::SetStakingContract {
                 staking_id: "staking".to_string(),
-            },
+            }],
         },
     )
     .assert_success();
@@ -125,7 +123,7 @@ fn test_create_dao_and_use_token() {
         .is_empty());
     assert_eq!(
         view!(dao.get_proposal(2)).unwrap_json::<Proposal>().status,
-        ProposalStatus::Approved
+        ProposalStatus::Approved{ version: 0 }
     );
     assert_eq!(
         view!(staking.ft_total_supply()).unwrap_json::<U128>().0,

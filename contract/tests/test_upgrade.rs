@@ -2,7 +2,7 @@ use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{Base58CryptoHash, ValidAccountId};
 use near_sdk::serde_json::json;
 use near_sdk_sim::{call, to_yocto, view, DEFAULT_GAS};
-use voyager::{Action, ProposalInput, ProposalKind, Instruction};
+use voyager::{Action, ProposalInput, Instruction};
 
 mod utils;
 use crate::utils::*;
