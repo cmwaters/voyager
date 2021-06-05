@@ -54,16 +54,19 @@ pub enum Action {
     AddCounterProposal,
     // Action to withdraw own proposal. Can only be done if no one else has 
     // already voted on it.
-    WithdrawProposal{ version: u8 },
+    WithdrawProposal,
+    // Action to amend proposal. Can only be done if no one else has
+    // already vote on it. 
+    AmendProposal,
     /// Action to remove given proposal. Used for immediate deletion in special cases.
     RemoveProposal,
     /// Vote to approve given proposal or bounty.
-    VoteApprove{ version: u8 },
+    VoteApprove,
     /// Vote to reject given proposal or bounty.
     VoteReject,
     /// Vote to remove given proposal or bounty (because it's spam).
     /// Removing version 0 (genesis proposal) removes the entire proposal topic
-    VoteRemove{ version: u8 },
+    VoteRemove,
     /// Finalize proposal, called when it's expired to return the funds
     /// (or in the future can be used for early proposal closure).
     Finalize,
@@ -73,13 +76,7 @@ pub enum Action {
 
 impl Action {
     pub fn to_label(&self) -> String {
-        match self {
-            Action::VoteApprove{ .. } => "VoteApprove".to_string(),
-            Action::VoteRemove{ .. } => "VoteRemove".to_string(),
-            Action::WithdrawProposal{ .. } => "WithdrawProposal".to_string(),
-            _ => format!("{:?}", self)
-        }
-        
+        format!("{:?}", self)        
     }
 }
 

@@ -408,15 +408,15 @@ impl Contract {
 impl Contract {
     /// Add proposal to this DAO.
     #[payable]
-    pub fn add_proposal(&mut self, proposal_input: ProposalInput) -> u64 {
-        let kind = self.internal_check_proposal(&proposal_input);
+    pub fn propose(&mut self, proposal: ProposalInput) -> u64 {
+        let kind = self.internal_check_proposal(&proposal);
 
-        let proposal = Proposal {
+        let p = Proposal {
             versions: vec![
                 ProposalVersion {
                     proposer: env::predecessor_account_id(),
-                    instructions: proposal_input.instructions,
-                    description: proposal_input.description,
+                    instructions: proposal.instructions,
+                    description: proposal.description,
                 }
             ],
             kind: kind.clone(),
@@ -431,28 +431,63 @@ impl Contract {
 
         let id = self.last_proposal_id;
         self.proposals
-            .insert(&id, &VersionedProposal::Default(proposal.into()));
+            .insert(&id, &VersionedProposal::Default(p.into()));
         self.last_proposal_id += 1;
         id
     }
 
     /// Adds a counter proposal to an existing one. Voters can only vote for one of these versions
-    pub fn add_counter_proposal(&mut self, id: u64, proposal_input: ProposalInput) -> u8 {
-        let kind = self.internal_check_proposal(&proposal_input);
+    #[payable]
+    pub fn counter_propose(&mut self, id: u64, proposal: ProposalInput) -> u8 {
         let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         // the new proposal must be of the same proposal_kind
+        let kind = self.internal_check_proposal(&proposal);
         assert_eq!(kind, proposal.kind, "ERR_DIFFERENT_PROPOSAL_KIND");
 
         proposal.versions.push(ProposalVersion{
             proposer: env::predecessor_account_id(),
-            instructions: proposal_input.instructions,
-            description: proposal_input.description,
+            instructions: proposal.instructions,
+            description: proposal.description,
         });
         proposal.approve_count.push(0);
         proposal.remove_count.push(0);
         proposal.remove_flag.push(false);
         (proposal.versions.len() - 1) as u8
     }
+
+    // Approve a proposal
+    pub fn approve(&mut self, id: u64, version: u8) {
+        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let policy = self.policy.get().unwrap().to_policy();
+        // Check permissions for the given action
+        let allowed = policy.can_execute_action(self.internal_user_info(), &proposal.kind, Action::VoteApprove);
+        assert!(allowed, "ERR_PERMISSION_DENIED");
+        assert_eq!(
+            proposal.status,
+            ProposalStatus::InProgress,
+            "ERR_PROPOSAL_NOT_IN_PROGRESS"
+        );
+        proposal.status = proposal.update_votes(
+            &sender_id,
+            Vote::from(action),
+            &vote_policy,
+            self.get_user_weight(&sender_id),
+        );
+        if proposal.status == ProposalStatus::Approved { 
+            
+        }
+    }
+
+    // Reject a proposal
+    pub fn reject()
+
+    pub fn withdraw()
+
+    pub fn veto()
+
+    pub fn remove()
+
+    pub fn amend()
 
     fn internal_check_proposal(&mut self, proposal_input: &ProposalInput) -> String {
         let policy = self.policy.get().unwrap().to_policy();
@@ -497,6 +532,7 @@ impl Contract {
                     Instruction::UpgradeSelf{ .. } |
                     Instruction::Vote |
                     Instruction::BountyDone{ .. } => return false,
+                    // TODO: add more cases
                     _ => {},
                 }
             }
@@ -508,7 +544,7 @@ impl Contract {
     pub fn act_proposal(&mut self, id: u64, action: Action) {
         let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         let policy = self.policy.get().unwrap().to_policy();
-        // Check permissions for the given action.n r5gfrdc b
+        // Check permissions for the given action
         let allowed = policy.can_execute_action(self.internal_user_info(), &proposal.kind, &action);
         assert!(allowed, "ERR_PERMISSION_DENIED");
         assert_eq!(
