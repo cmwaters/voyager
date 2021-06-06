@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap};
+use std::u128;
 
 use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
@@ -46,7 +47,7 @@ impl ProposalKind {
 #[serde(crate = "near_sdk::serde")]
 pub enum ProposalStatus {
     InProgress,
-    /// If quorum voted yes, this version of the proposal is successfully approved.
+    /// If quorum voted yes, one of the versions of the proposal was successfully approved.
     Approved{ version: u8 },
     /// If quorum voted no, this proposal is rejected. Bond is returned.
     Rejected,
@@ -139,23 +140,17 @@ impl Instruction {
 /// proposal topic. A vote of 0
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(crate = "near_sdk::serde")]
-pub enum Vote {
-    Remove{ version: u8 },
-    Reject,
-    Approve{ version: u8 },
+pub struct Vote {
+    pub choice: u8,
+    pub weight: u128,
 }
 
-impl From<Action> for Vote {
-    fn from(action: Action) -> Self {
-        match action {
-            Action::VoteApprove{ version} => Vote::Approve{ version },
-            Action::VoteReject => Vote::Reject,
-            Action::VoteRemove{ version} => Vote::Remove{ version },
-            _ => unreachable!(),
-        }
-    }
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(crate = "near_sdk::serde")]
+pub struct RemoveVote {
+    pub account_id: AccountId,
+    pub version: u8,
 }
-
 
 /// Proposal that are sent to this DAO.
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
@@ -177,7 +172,9 @@ pub struct Proposal {
     /// Flag to indicate the removal of a proposal
     pub remove_flag: Vec<bool>,
     /// Map of who voted to prevent multiple voting
-    pub votes: HashMap<AccountId, Vec<Vote>>,
+    pub votes: HashMap<AccountId, Vote>,
+    /// Hashset of remove votes to prevent multiple voting
+    pub remove_votes: Vec<RemoveVote>,
     /// Submission time (for voting period).
     pub submission_time: WrappedTimestamp,
 }
@@ -216,58 +213,78 @@ impl Proposal {
         account_id: &AccountId,
         vote: Vote,
         vote_policy: &VotePolicy,
-        user_weight: Balance,
-    ) {
+        threshold: u128
+    ) -> ProposalStatus {
+        // add vote to tally and check previous votes
+        let old_vote = self.votes.insert(account_id.clone(), vote.clone());
+        // if the voter previously voted then revert it
+        let mut weight = vote.weight;
+        if old_vote.is_some() {
+            let v = old_vote.unwrap();
+            if v.choice == 0 {
+                self.reject_count -= v.weight
+            } else {
+                self.approve_count[(v.choice - 1) as usize] += v.weight
+            }
+            // set the weight to what it was when the user first voted
+            weight = v.weight
+        }
+
+        assert!(!self.remove_flag[(vote.choice - 1) as usize], "ERR_PROPOSAL_REMOVED");
+
+        // version should have already been vetted
+        if vote.choice == 0 {
+            self.reject_count -= weight;
+        } else {
+            self.approve_count[(vote.choice - 1) as usize] += weight;
+        }
+
+        if self.reject_count >= threshold {
+            return ProposalStatus::Rejected
+        }
+        
+        if self.approve_count[(vote.choice - 1) as usize] >= threshold {
+            return ProposalStatus::Approved{ version: (vote.choice - 1) }
+        }
+
+        ProposalStatus::InProgress
+    }
+
+    pub fn update_remove_votes(
+        &mut self, 
+        vote: RemoveVote, 
+        weight: u128, 
+        threshold: u128
+    ) -> bool {
+        assert!(vote.version < self.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
+        for v in self.remove_votes.iter() {
+            assert!(v != &vote, "ERR_ALREADY_VOTED")
+        }
+        self.remove_count[vote.version as usize] += weight;
+        if self.remove_count[vote.version as usize] >= threshold {
+            self.remove_votes.push(vote);
+            return true
+        }
+        self.remove_votes.push(vote);
+        false
+    }
+
+    pub fn create_vote(&self, 
+        vote_policy: &VotePolicy, 
+        choice: u8, 
+        user_weight: Balance
+    ) -> Vote {
+        assert!(choice <= self.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
         // calculate the weight of the vote
-        let amount = match vote_policy.weight_kind {
+        let weight = match vote_policy.weight_kind {
             WeightKind::TokenWeight => user_weight,
             WeightKind::RoleWeight => 1,
         };
-        // version should have already been vetted
-        match vote {
-            Vote::Remove{ version} => {
-                assert!(version < self.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
-                self.remove_count[version as usize] += amount;
-            },
-            Vote::Reject => {
-                self.reject_count += amount;
-            },
-            Vote::Approve{ version } => {
-                assert!(version < self.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
-                self.approve_count[version as usize] += amount;
-            }
-        }
-        let votes = self.votes.insert(account_id.clone(), vec![vote.clone()]);
-        if votes.is_some() {
-            check_double_vote(votes.unwrap(), &vote)
+        Vote {
+            choice,
+            weight,
         }
     }
-
-}
-
-fn check_double_vote(votes: Vec<Vote>, vote: &Vote) {
-    match vote {
-        Vote::Remove { .. } |
-        Vote::Reject => {
-            for v in votes {
-                assert!(&v != vote, "ERR_ALREADY_VOTED")
-            }
-        }
-        Vote::Approve { .. } => {
-            for v in votes {
-                assert!(matches!(v, Vote::Approve{ .. }), "ERR_ALREADY_VOTED")
-            }
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(crate = "near_sdk::serde")]
-pub struct ProposalInput {
-    /// Description of this proposal.
-    pub description: String,
-    /// Instructions to be executed if proposal is approved.
-    pub instructions: Vec<Instruction>,
 }
 
 impl Contract {
@@ -408,15 +425,15 @@ impl Contract {
 impl Contract {
     /// Add proposal to this DAO.
     #[payable]
-    pub fn propose(&mut self, proposal: ProposalInput) -> u64 {
-        let kind = self.internal_check_proposal(&proposal);
+    pub fn propose(&mut self, description: String, instructions: Vec<Instruction>) -> u64 {
+        let kind = self.internal_check_proposal(&instructions);
 
         let p = Proposal {
             versions: vec![
                 ProposalVersion {
                     proposer: env::predecessor_account_id(),
-                    instructions: proposal.instructions,
-                    description: proposal.description,
+                    instructions: instructions,
+                    description: description,
                 }
             ],
             kind: kind.clone(),
@@ -426,6 +443,7 @@ impl Contract {
             remove_count: vec![0],
             remove_flag: vec![false],
             votes: HashMap::new(),
+            remove_votes: Vec::new(),
             submission_time: WrappedTimestamp::from(env::block_timestamp())
         };
 
@@ -438,58 +456,255 @@ impl Contract {
 
     /// Adds a counter proposal to an existing one. Voters can only vote for one of these versions
     #[payable]
-    pub fn counter_propose(&mut self, id: u64, proposal: ProposalInput) -> u8 {
-        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+    pub fn counter_propose(&mut self, id: u64, description: String, instructions: Vec<Instruction>) -> u8 {
+        let mut p: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        
         // the new proposal must be of the same proposal_kind
-        let kind = self.internal_check_proposal(&proposal);
-        assert_eq!(kind, proposal.kind, "ERR_DIFFERENT_PROPOSAL_KIND");
+        let kind = self.internal_check_proposal(&instructions);
+        assert_eq!(kind, p.kind, "ERR_DIFFERENT_PROPOSAL_KIND");
 
-        proposal.versions.push(ProposalVersion{
+        // add the new proposal version, update the tallies and return the corresponding version
+        p.versions.push(ProposalVersion{
             proposer: env::predecessor_account_id(),
-            instructions: proposal.instructions,
-            description: proposal.description,
+            instructions,
+            description,
         });
-        proposal.approve_count.push(0);
-        proposal.remove_count.push(0);
-        proposal.remove_flag.push(false);
-        (proposal.versions.len() - 1) as u8
+        p.approve_count.push(0);
+        p.remove_count.push(0);
+        p.remove_flag.push(false);
+        
+        let version: u8 = (p.versions.len() - 1) as u8;
+        self.proposals.insert(&id, &VersionedProposal::Default(p));
+        version
     }
 
     // Approve a proposal
     pub fn approve(&mut self, id: u64, version: u8) {
+        self.handle_vote(id, version + 1)
+    }
+
+    // Reject a proposal
+    pub fn reject(&mut self, id: u64) {
+        self.handle_vote(id, 0)
+    }
+
+    pub fn withdraw(&mut self, id: u64, version: u8) {
         let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         let policy = self.policy.get().unwrap().to_policy();
+
         // Check permissions for the given action
-        let allowed = policy.can_execute_action(self.internal_user_info(), &proposal.kind, Action::VoteApprove);
+        let allowed = policy.can_execute_action(
+            self.internal_user_info(), 
+            &proposal.kind, 
+            &Action::WithdrawProposal
+        );
         assert!(allowed, "ERR_PERMISSION_DENIED");
         assert_eq!(
             proposal.status,
             ProposalStatus::InProgress,
             "ERR_PROPOSAL_NOT_IN_PROGRESS"
         );
-        proposal.status = proposal.update_votes(
-            &sender_id,
-            Vote::from(action),
-            &vote_policy,
-            self.get_user_weight(&sender_id),
+
+        // Only the proposer can withdraw a proposal
+        assert!(version < proposal.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
+        assert!(!proposal.remove_flag[version as usize], "ERR_ALREADY_REMOVED");
+        assert_eq!(
+            proposal.versions[version as usize].proposer,
+            env::predecessor_account_id(),
+            "ERR_UNAUTHORIZED_WITHDRAW"
         );
-        if proposal.status == ProposalStatus::Approved { 
-            
-        }
+
+        // No one should have voted on the proposal yet
+        assert_eq!(proposal.approve_count[version as usize], 0, "ERR_VOTING_BEGUN");
+        assert_eq!(proposal.remove_count[version as usize], 0, "ERR_VOTING_BEGUN");
+        proposal.remove_flag[version as usize] = true;
+
+        self.proposals
+                .insert(&id, &VersionedProposal::Default(proposal));
     }
 
-    // Reject a proposal
-    pub fn reject()
+    pub fn veto(&mut self, id: u64, version: u8) {
+        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let policy = self.policy.get().unwrap().to_policy();
 
-    pub fn withdraw()
+        // Check permissions for the given action
+        let allowed = policy.can_execute_action(self.internal_user_info(), &proposal.kind, &Action::VoteRemove);
+        assert!(allowed, "ERR_PERMISSION_DENIED");
+        assert_eq!(
+            proposal.status,
+            ProposalStatus::InProgress,
+            "ERR_PROPOSAL_NOT_IN_PROGRESS"
+        );
+        let vote_policy = policy
+            .get_vote_policy(&proposal.kind)
+            .unwrap_or(&policy.default_vote_policy);
+        let sender_id = env::predecessor_account_id();
+        
+        let threshold = policy.get_threshold(
+            vote_policy,
+            self.total_delegation_amount,
+            &proposal.kind,
+        );
+        let weight = self.get_user_weight(&sender_id);
+        let removeVote = RemoveVote {
+            account_id: sender_id,
+            version: version,
+        };
 
-    pub fn veto()
+        proposal.remove_flag[version as usize] = proposal.update_remove_votes(
+            removeVote,
+            weight,
+            threshold,
+        );
 
-    pub fn remove()
+        self.proposals
+                .insert(&id, &VersionedProposal::Default(proposal));
+    }
 
-    pub fn amend()
+    pub fn remove(&mut self, id: u64) {
+        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let policy = self.policy.get().unwrap().to_policy();
 
-    fn internal_check_proposal(&mut self, proposal_input: &ProposalInput) -> String {
+        // Check permissions for the given action
+        let allowed = policy.can_execute_action(
+            self.internal_user_info(),
+            &proposal.kind, 
+            &Action::RemoveProposal
+        );
+        assert!(allowed, "ERR_PERMISSION_DENIED");
+        assert_eq!(
+            proposal.status,
+            ProposalStatus::InProgress,
+            "ERR_PROPOSAL_NOT_IN_PROGRESS"
+        );
+
+        self.proposals.remove(&id);
+    }
+
+    pub fn finalize(&mut self, id: u64) {
+        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let policy = self.policy.get().unwrap().to_policy();
+
+        let allowed = policy.can_execute_action(
+            self.internal_user_info(), 
+            &proposal.kind, 
+            &Action::Finalize
+        );
+        assert!(allowed, "ERR_PERMISSION_DENIED");
+        assert_eq!(
+            proposal.status,
+            ProposalStatus::InProgress,
+            "ERR_PROPOSAL_NOT_IN_PROGRESS"
+        );
+
+        proposal.status = policy.proposal_status(
+            &proposal,
+            self.total_delegation_amount,
+        );
+        assert_eq!(
+            proposal.status,
+            ProposalStatus::Expired,
+            "ERR_PROPOSAL_NOT_EXPIRED"
+        );
+        self.internal_reject_proposal(&policy, &proposal);
+    }
+
+    pub fn amend(&mut self, id: u64, version: u8, description: String, instructions: Vec<Instruction>) {
+        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let policy = self.policy.get().unwrap().to_policy();
+
+        // Check permissions for the given action
+        let allowed = policy.can_execute_action(
+            self.internal_user_info(), 
+            &proposal.kind, 
+            &Action::AmendProposal
+        );
+        assert!(allowed, "ERR_PERMISSION_DENIED");
+        assert_eq!(
+            proposal.status,
+            ProposalStatus::InProgress,
+            "ERR_PROPOSAL_NOT_IN_PROGRESS"
+        );
+
+        // the new proposal must be of the same proposal_kind
+        let kind = self.internal_check_proposal(&instructions);
+        assert_eq!(kind, proposal.kind, "ERR_DIFFERENT_PROPOSAL_KIND");
+
+        assert!(version < proposal.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
+        assert_eq!(proposal.versions[version as usize].proposer, env::predecessor_account_id(), "ERR_UNAUTHORIZED_AMEND");
+        // No one should have voted on the proposal yet
+        assert_eq!(proposal.approve_count[version as usize], 0, "ERR_VOTING_BEGUN");
+        assert_eq!(proposal.remove_count[version as usize], 0, "ERR_VOTING_BEGUN");
+        
+        proposal.versions[version as usize] = ProposalVersion {
+            proposer: env::predecessor_account_id(),
+            description,
+            instructions
+        };
+        self.proposals
+                .insert(&id, &VersionedProposal::Default(proposal));
+    }
+
+    fn handle_vote(&mut self, id: u64, choice: u8) {
+        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let policy = self.policy.get().unwrap().to_policy();
+        assert!(choice <= proposal.versions.len() as u8, "ERR_INVALID_CHOICE");
+
+        // Check permissions for the given action
+        let mut action = Action::VoteApprove;
+        if choice == 0 {
+            action = Action::VoteReject;
+        }
+        let allowed = policy.can_execute_action(self.internal_user_info(), &proposal.kind, &action);
+        assert!(allowed, "ERR_PERMISSION_DENIED");
+        assert_eq!(
+            proposal.status,
+            ProposalStatus::InProgress,
+            "ERR_PROPOSAL_NOT_IN_PROGRESS"
+        );
+        let vote_policy = policy
+            .get_vote_policy(&proposal.kind)
+            .unwrap_or(&policy.default_vote_policy);
+        let sender_id = env::predecessor_account_id();
+
+        // create the vote - this also checks that the proposal version exists
+        let vote = proposal.create_vote(
+            &vote_policy,
+            choice, 
+            self.get_user_weight(&sender_id)
+        );
+
+        let threshold = policy.get_threshold(
+            &vote_policy,
+            self.total_delegation_amount, 
+            &proposal.kind,
+        );
+
+        // update the votes and check if the status of the proposal has changed
+        proposal.status = proposal.update_votes(
+            &sender_id,
+            vote,
+            &vote_policy,
+            threshold
+        );
+        match proposal.status {
+            ProposalStatus::Approved{ version } => { 
+                // success, now execute the proposal
+                self.internal_execute_proposal(&policy, &proposal, &proposal.versions[version as usize]);
+            },
+            ProposalStatus::Rejected => {
+                // defeated, return the bond
+                self.internal_reject_proposal(&policy, &proposal)
+            }
+            _ => {}, 
+        };
+
+        // update the proposal
+        self.proposals
+                .insert(&id, &VersionedProposal::Default(proposal));
+    }
+
+    fn internal_check_proposal(&mut self, instructions: &Vec<Instruction>) -> String {
         let policy = self.policy.get().unwrap().to_policy();
         assert!(
             env::attached_deposit() >= policy.proposal_bond.0,
@@ -497,9 +712,9 @@ impl Contract {
         );
 
         // 1. validate proposal.
-        assert!(proposal_input.instructions.len() > 0, "ERR_EMPTY_INSTRUCTION_SET");
-        assert!(self.is_valid_instruction_set(&proposal_input.instructions), "ERR_INVALID_INSTRUCTION_SET");
-        match proposal_input.instructions[0] {
+        assert!(instructions.len() > 0, "ERR_EMPTY_INSTRUCTION_SET");
+        assert!(self.is_valid_instruction_set(&instructions), "ERR_INVALID_INSTRUCTION_SET");
+        match instructions[0] {
             Instruction::SetStakingContract { .. } => assert!(
                 self.staking_id.is_none(),
                 "ERR_STAKING_CONTRACT_CANT_CHANGE"
@@ -509,7 +724,7 @@ impl Contract {
         };
 
         // 2. check permission of caller to add proposal.
-        let kind = policy.match_proposal_kind(&proposal_input.instructions);
+        let kind = policy.match_proposal_kind(&instructions);
         assert!(
             policy
                 .can_execute_action(
@@ -538,117 +753,5 @@ impl Contract {
             }
         }
         true
-    }
-
-    /// Act on given proposal by id, if permissions allow.
-    pub fn act_proposal(&mut self, id: u64, action: Action) {
-        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
-        let policy = self.policy.get().unwrap().to_policy();
-        // Check permissions for the given action
-        let allowed = policy.can_execute_action(self.internal_user_info(), &proposal.kind, &action);
-        assert!(allowed, "ERR_PERMISSION_DENIED");
-        assert_eq!(
-            proposal.status,
-            ProposalStatus::InProgress,
-            "ERR_PROPOSAL_NOT_IN_PROGRESS"
-        );
-        let vote_policy = policy.get_vote_policy(&proposal.kind).expect("ERR_NO_VOTE_POLICY");
-        let sender_id = env::predecessor_account_id();
-        // Update proposal given action. Returns true if should be updated in storage.
-        let update = match action {
-            Action::AddProposal => env::panic(b"ERR_WRONG_ACTION"),
-            Action::AddCounterProposal => env::panic(b"ERR_WRONG_ACTION"),
-            Action::RemoveProposal => {
-                self.proposals.remove(&id);
-                false
-            }
-            Action::WithdrawProposal{ version } => {
-                // Only the proposer can withdraw a proposal
-                assert!(version < proposal.versions.len() as u8, "ERR_NO_PROPOSAL_VERSION");
-                assert!(!proposal.remove_flag[version as usize], "ERR_ALREADY_REMOVED");
-                assert_eq!(
-                    proposal.versions[version as usize].proposer,
-                    sender_id,
-                    "ERR_UNAUTHORIZED_WITHDRAW"
-                );
-
-                // No one should have voted on the proposal yet
-                assert_eq!(proposal.approve_count[version as usize], 0, "ERR_VOTING_BEGUN");
-                assert_eq!(proposal.remove_count[version as usize], 0, "ERR_VOTING_BEGUN");
-                proposal.remove_flag[version as usize] = true;
-                true
-            },
-            Action::VoteRemove{ version } => {
-                // Update vote tally
-                proposal.update_votes(
-                    &sender_id,
-                    Vote::from(action),
-                    &vote_policy,
-                    self.get_user_weight(&sender_id),
-                );
-                let threshold = policy.get_threshold(
-                    &vote_policy, 
-                    self.total_delegation_amount, 
-                    &proposal.kind,
-                );
-                if proposal.remove_count[version as usize] > threshold { 
-                    proposal.remove_flag[version as usize] = true;
-                }
-                true
-            },
-            Action::VoteApprove{ version } => {
-                // Update vote tally
-                proposal.update_votes(
-                    &sender_id,
-                    Vote::from(action),
-                    &vote_policy,
-                    self.get_user_weight(&sender_id),
-                );
-                // Updates proposal status with new votes using the policy.
-                proposal.status =
-                    policy.proposal_status(&proposal, self.total_delegation_amount);
-                match proposal.status {
-                    ProposalStatus::Approved{ .. } => {
-                        self.internal_execute_proposal(&policy, &proposal, &proposal.versions[version as usize]);
-                    },
-                    _ => unreachable!()
-                }
-                true
-            },
-            Action::VoteReject => {
-                // Update vote tally
-                proposal.update_votes(
-                    &sender_id,
-                    Vote::from(action),
-                    &vote_policy,
-                    self.get_user_weight(&sender_id),
-                );
-                // Updates proposal status with new votes using the policy.
-                proposal.status =
-                    policy.proposal_status(&proposal, self.total_delegation_amount);
-                if proposal.status == ProposalStatus::Rejected {
-                    self.internal_reject_proposal(&policy, &proposal);
-                }
-                true
-            },
-            Action::Finalize => {
-                proposal.status = policy.proposal_status(
-                    &proposal,
-                    self.total_delegation_amount,
-                );
-                assert_eq!(
-                    proposal.status,
-                    ProposalStatus::Expired,
-                    "ERR_PROPOSAL_NOT_EXPIRED"
-                );
-                self.internal_reject_proposal(&policy, &proposal);
-                true
-            }
-            Action::MoveToHub => false,
-        };
-        if update {
-            self.proposals
-                .insert(&id, &VersionedProposal::Default(proposal));
-        }
     }
 }

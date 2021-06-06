@@ -353,7 +353,7 @@ impl Policy {
         let mut version = 0;
         for total in proposal.approve_count.clone().into_iter() {
             if total >= threshold {
-                return ProposalStatus::Approved{version}
+                return ProposalStatus::Approved{ version }
             }
             version += 1;
         }
@@ -371,8 +371,8 @@ impl Policy {
                     let mut total: u128 = 0;
                     for role in self.roles.iter() {
                         if role.permissions.contains(&format!("{}:*", proposal_kind))
-                            || role.permissions.contains(&format!("*:{}", Action::VoteApprove{ version: 0 }.to_label()))
-                            || role.permissions.contains(&format!("{}:{}", proposal_kind, Action::VoteApprove{ version: 0 }.to_label())) {
+                            || role.permissions.contains(&format!("*:{}", Action::VoteApprove.to_label()))
+                            || role.permissions.contains(&format!("{}:{}", proposal_kind, Action::VoteApprove.to_label())) {
                             total += role
                                 .kind
                                 .get_role_size()

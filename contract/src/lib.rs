@@ -11,7 +11,7 @@ use near_sdk::{
 use crate::bounties::{Bounty, BountyClaim, VersionedBounty};
 pub use crate::policy::{Policy, RoleKind, RolePermission, VersionedPolicy, VotePolicy};
 use crate::proposals::VersionedProposal;
-pub use crate::proposals::{Proposal, ProposalInput, Instruction, ProposalKind, ProposalStatus};
+pub use crate::proposals::{Proposal, Instruction, ProposalKind, ProposalStatus};
 pub use crate::types::{Action, Config};
 
 mod bounties;
@@ -211,14 +211,14 @@ mod tests {
 
     fn create_proposal(context: &mut VMContextBuilder, contract: &mut Contract) -> u64 {
         testing_env!(context.attached_deposit(to_yocto("1")).build());
-        contract.add_proposal(ProposalInput {
-            description: "test".to_string(),
-            instructions: vec![Instruction::Transfer {
+        contract.propose(
+            "test".to_string(),
+            vec![Instruction::Transfer {
                 token_id: BASE_TOKEN.to_string(),
                 receiver_id: accounts(2).into(),
                 amount: U128(to_yocto("100")),
             }],
-        })
+        )
     }
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(contract.get_proposals(0, 10).len(), 1);
 
         let id = create_proposal(&mut context, &mut contract);
-        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
+        contract.approve(id, 0);
         assert_eq!(
             contract.get_proposal(id).proposal.status,
             ProposalStatus::Approved{ version: 0 }
@@ -245,7 +245,7 @@ mod tests {
         testing_env!(context
             .block_timestamp(1_000_000_000 * 24 * 60 * 60 * 8)
             .build());
-        contract.act_proposal(id, Action::Finalize);
+        contract.finalize(id);
         assert_eq!(
             contract.get_proposal(id).proposal.status,
             ProposalStatus::Expired
@@ -256,13 +256,13 @@ mod tests {
             .predecessor_account_id(accounts(2))
             .attached_deposit(to_yocto("1"))
             .build());
-        let _id = contract.add_proposal(ProposalInput {
-            description: "test".to_string(),
-            instructions: vec![Instruction::AddMemberToRole {
+        let _id = contract.propose(
+            "test".to_string(),
+            vec![Instruction::AddMemberToRole {
                 member_id: accounts(2).into(),
                 role: "council".to_string(),
             }],
-        });
+        );
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
         );
         let id = create_proposal(&mut context, &mut contract);
         assert_eq!(contract.get_proposal(id).proposal.versions[0].description, "test");
-        contract.act_proposal(id, Action::RemoveProposal);
+        contract.remove(id);
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod tests {
         let mut contract = Contract::new(Config::test_config(), policy);
         let id = create_proposal(&mut context, &mut contract);
         assert_eq!(contract.get_proposal(id).proposal.versions[0].description, "test");
-        contract.act_proposal(id, Action::RemoveProposal);
+        contract.remove(id);
         assert_eq!(contract.get_proposals(0, 10).len(), 0);
     }
 
@@ -306,11 +306,10 @@ mod tests {
         testing_env!(context
             .block_timestamp(1_000_000_000 * 24 * 60 * 60 * 8)
             .build());
-        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
+        contract.approve(id, 0);
     }
 
     #[test]
-    #[should_panic(expected = "ERR_ALREADY_VOTED")]
     fn test_vote_twice() {
         let mut context = VMContextBuilder::new();
         testing_env!(context.predecessor_account_id(accounts(1)).build());
@@ -319,7 +318,7 @@ mod tests {
             VersionedPolicy::Default(vec![accounts(1).into(), accounts(2).into()]),
         );
         let id = create_proposal(&mut context, &mut contract);
-        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
-        contract.act_proposal(id, Action::VoteApprove{ version: 0 });
+        contract.approve(id, 0);
+        contract.approve(id, 0);
     }
 }

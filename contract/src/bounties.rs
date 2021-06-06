@@ -172,13 +172,13 @@ impl Contract {
                 env::predecessor_account_id(),
                 "ERR_BOUNTY_DONE_MUST_BE_SELF"
             );
-            self.add_proposal(ProposalInput {
+            self.propose(
                 description,
-                instructions: vec![Instruction::BountyDone {
+                vec![Instruction::BountyDone {
                     bounty_id: id,
                     receiver_id: sender_id.clone(),
                 }],
-            });
+            );
             claims[claim_idx].completed = true;
             self.bounty_claimers.insert(&sender_id, &claims);
         }
@@ -210,7 +210,7 @@ mod tests {
     use near_sdk::{testing_env, MockedBlockchain};
     use near_sdk_sim::to_yocto;
 
-    use crate::proposals::{ProposalInput, ProposalKind};
+    use crate::proposals::{ProposalKind};
     use crate::types::BASE_TOKEN;
     use crate::{Action, Config};
 
@@ -226,9 +226,9 @@ mod tests {
             VersionedPolicy::Default(vec![accounts(1).into()]),
         );
         testing_env!(context.attached_deposit(to_yocto("1")).build());
-        contract.add_proposal(ProposalInput {
-            description: "test".to_string(),
-            instructions: vec![Instruction::AddBounty {
+        contract.propose(
+            "test".to_string(),
+            vec![Instruction::AddBounty {
                 bounty: Bounty {
                     description: "test bounty".to_string(),
                     token: BASE_TOKEN.to_string(),
@@ -237,10 +237,10 @@ mod tests {
                     max_deadline: WrappedDuration::from(1_000),
                 },
             }],
-        });
+        );
         assert_eq!(contract.get_last_bounty_id(), 0);
 
-        contract.act_proposal(0, Action::VoteApprove{ version: 0 });
+        contract.approve(0, 0);
 
         assert_eq!(contract.get_last_bounty_id(), 1);
         assert_eq!(contract.get_bounty(0).bounty.times, 2);
@@ -266,7 +266,7 @@ mod tests {
             "bounty_done"
         );
 
-        contract.act_proposal(1, Action::VoteApprove{ version: 0 });
+        contract.approve(1, 0);
 
         assert_eq!(contract.get_bounty_claims(accounts(1)).len(), 0);
         assert_eq!(contract.get_bounty(0).bounty.times, 1);
