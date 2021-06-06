@@ -212,7 +212,6 @@ impl Proposal {
         &mut self,
         account_id: &AccountId,
         vote: Vote,
-        vote_policy: &VotePolicy,
         threshold: u128
     ) -> ProposalStatus {
         // add vote to tally and check previous votes
@@ -546,13 +545,13 @@ impl Contract {
             &proposal.kind,
         );
         let weight = self.get_user_weight(&sender_id);
-        let removeVote = RemoveVote {
+        let remove_vote = RemoveVote {
             account_id: sender_id,
             version: version,
         };
 
         proposal.remove_flag[version as usize] = proposal.update_remove_votes(
-            removeVote,
+            remove_vote,
             weight,
             threshold,
         );
@@ -562,7 +561,7 @@ impl Contract {
     }
 
     pub fn remove(&mut self, id: u64) {
-        let mut proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
+        let proposal: Proposal = self.proposals.get(&id).expect("ERR_NO_PROPOSAL").into();
         let policy = self.policy.get().unwrap().to_policy();
 
         // Check permissions for the given action
@@ -684,7 +683,6 @@ impl Contract {
         proposal.status = proposal.update_votes(
             &sender_id,
             vote,
-            &vote_policy,
             threshold
         );
         match proposal.status {
