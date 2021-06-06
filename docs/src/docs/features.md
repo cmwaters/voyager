@@ -49,8 +49,43 @@ Prior, tallies were kept for each role and the
 
 Counter proposals must be of the same `ProposalKind` (more information on how proposals are categorized in the next section). Votes are tracked 
 
+## Repeat Votes
+
+If we allow members to counter propose, to express their own perspective on the issue, then how does this affect voting. It is conceivable that a member votes on a proposal and then a later proposal is submitted that better captures the voters preference. To solve this issue we either create two separate phases, for proposing and voting or we allow a voter to then change their mind. While the former constrains how quick a proposal can be executed the later not only avoids that but gives greater flexbility generally to how a proposal may evolve from the discussions that surround it. Because of this, the VoyagerDAO has been modified to allow voters to vote again and again if need be. 
+
 ## Multi-messaged Proposals
 
-The SputnikDAO 
+The SputnikDAO categorises the possible typs of actions that can be executed as the `ProposalKind`. This can be, for example, to change a member or policy, add a bounty or execute any other contract. There may be situations however where a members wants to propose a set of actions. To accomodate this, VoyagerDAO uses an array to combine and types of `ProposalKind` together. Allowing to mix and match proposals, whilst offering greater flexibility introduces it's own set of challenges, namely how do we deicde what the actual `ProposalKind` is. To solve this, VoyagerDAO breaks down the prior concept into two. `Instruction`'s which are an array of actions that get executed if the proposal is accepted and `ProposalKind` which encapsulates how we treat an array of instructions.
+
+```rust
+pub fn propose(&mut self, description: String, instructions: Vec<Instruction>) -> u64 {
+    let kind = self.internal_check_proposal(&instructions);
+    ...
+}
+```
+
+We thus define the `ProposalKind` as the following:
+
+```rust
+pub struct  ProposalKind {
+    /// All proposals fall under this kind
+    pub name: String,
+    /// Proposal must have all of the following instructions within it to be considered
+    /// part of this proposal kind. This information is thus used to decide whether a proposal
+    /// matches this proposal kind
+    required_instrs: Vec<InstructionKind>,
+    /// the vote policy that get's associated
+    pub vote_policy: VotePolicy,
+}
+```
+
+An array of `ProposalKind` is set within the policy. The order of the array is important and must be from most restrictive to least restrictive. For a set of instructions to fall under that `ProposalKind`, all of the required instructions must be a subset of the instructions in the proposal. If no `ProposalKind` is matched, we fallback to the default `VotePolicy`
 
 ## Withdrawing and Amending Proposals
+
+The final feature is designed to provide better user experience. There is always the possibility that throughout the proposal process that mistakes are made. VoyagerDAO adds the ability to withdraw proposals that at a later point seem unfit for the DAO or to amend proposals that have mistakes in the way that they were structured.  
+
+In order to provide some degree of continuity there are a set of rules that come with withdrawing and amending proposal.
+- Only the proposer can withdraw or amend proposals
+- The proposer must have `WithdrawProposal` or `AmendProposal` permissions.
+- The proposer can only perform these actions if no one has voted on the proposal yet.

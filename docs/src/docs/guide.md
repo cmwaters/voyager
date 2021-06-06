@@ -25,4 +25,10 @@ near call $CONTRACT_ID create "{\"name\": \"genesis\", \"args\": \"$ARGS\"}"  --
 ```
 The commands should return `true` at the bottom if it passed. You can further validate it by running `near view genesis.$CONTRACT_ID get_policy` or to check all the DAO's the factory has built `near view $CONTRACT_ID get_dao_list`.
 
-4. Create a proposal. 
+4. Create a proposal. First lets name our dao `DAO=genesis.$CONTRACT_ID`. This proposal looks to add a new member to the council. 
+
+```
+near call $DAO propose '{"description": "test", "submission_time":"120000000000", "instructions": [{"AddMemberToRole": {"member_id": "another-account.testnet", "role": "council"}}]}' --accountId another-account.testnet --amount 1
+```
+
+

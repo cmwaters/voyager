@@ -4,3 +4,21 @@ This section defines the interface to the dao contract, listing all the commands
 
 ## Propose
 
+## Counter Propose
+
+## Amend
+
+## Withdraw
+
+## Approve
+
+## Reject
+
+## Veto
+
+## Remove
+
+## Finalize
+
+
+

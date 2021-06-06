@@ -41,7 +41,8 @@ module.exports = {
     [
       "/docs/introduction",
       "/docs/guide",
-      "/docs/features",      
+      "/docs/features",
+      "/docs/commands",
     ],
 
     nav: [
